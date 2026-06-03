@@ -1,22 +1,17 @@
 """
-Synthetic data generation for teaching nanochat about its identity and capabilities.
+Synthetische Datengenerierung, um nanochat seine Identität & Fähigkeiten beizubringen.
 
-This script uses the OpenRouter API to generate diverse multi-turn conversations
-between a user and nanochat. The conversations are saved to a .jsonl file for use
-in supervised finetuning (SFT) via the CustomJSON task.
+Nutzt die OpenRouter-API, um diverse deutschsprachige Multi-Turn-Gespräche zwischen
+einem User und nanochat zu erzeugen. Die Gespräche werden als .jsonl gespeichert und
+via CustomJSON-Task im SFT verwendet.
 
-Key design principles for high-quality synthetic data:
-1. DIVERSITY CONTROL is critical - we inject entropy at multiple levels:
-   - Topic/question categories (what the conversation is about)
-   - User personas (who is asking)
-   - Conversation dynamics (shape and flow)
-   - First message style (greeting variation)
-2. Comprehensive knowledge base - we provide detailed facts so the LLM
-   generating conversations has accurate information to draw from.
-3. Structured outputs - we use JSON schema to guarantee valid format.
+Angepasst auf die DEUTSCHE Variante (Mario & Jonathan, DHBW Lörrach, Vorlesung
+"KI und Data Science" bei Frau Nakou). Faktenquelle: knowledge/self_knowledge.md.
 
-NOTE: You need OPENROUTER_API_KEY set in .env or as an environment variable.
-NOTE: For more details see: https://github.com/karpathy/nanochat/discussions/139
+Qualitäts-Prinzipien: Diversität (Themen, Personas, Gesprächsverläufe, Eröffnungen)
++ akkurate Faktenbasis + strukturierte JSON-Ausgabe.
+
+VORAUSSETZUNG: OPENROUTER_API_KEY in .env oder als Umgebungsvariable.
 """
 import requests
 import json
@@ -26,6 +21,9 @@ import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
+import sys
+# Repo-Root in den Pfad, damit `nanochat` importierbar ist, egal von wo gestartet
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nanochat.common import get_base_dir
 
 load_dotenv()
@@ -37,231 +35,194 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# Load the comprehensive knowledge base
+# Maßgebliche Faktenbasis (deutsch, unsere Fakten)
 knowledge_path = os.path.join(os.path.dirname(__file__), "..", "knowledge", "self_knowledge.md")
-knowledge = open(knowledge_path, "r", encoding="utf-8").read().strip()
 assert os.path.exists(knowledge_path), f"Knowledge base file not found: {knowledge_path}"
-# for right now I am not committing the self_knowledge file to repo. You can use README.md instead
-# of it, or you can generate one by asking an LLM to make one based on the README/files.
-# This whole file is just a helpful demonstration of the kind of thing you'd run.
+knowledge = open(knowledge_path, "r", encoding="utf-8").read().strip()
 
 # =============================================================================
-# DIVERSITY DIMENSIONS
+# DIVERSITÄTS-DIMENSIONEN (alles auf Deutsch, auf unser Projekt zugeschnitten)
 # =============================================================================
 
-# Topics/questions the conversation should explore
-# Group by category for balanced sampling
+# Themen/Fragen, die das Gespräch erkunden soll — nach Kategorie für balanciertes Sampling
 topics = {
-    "identity": [
-        "who/what is nanochat",
-        "who created nanochat and why",
-        "what does the name 'nanochat' mean",
-        "is nanochat open source, what license",
-        "where can I find the code",
-        "how can I contribute to nanochat",
-    ],
-    "architecture": [
-        "basic architecture overview (transformer, layers, parameters)",
-        "what is RoPE and why use it",
-        "explain RMSNorm vs LayerNorm",
-        "what is Flash Attention and why it matters",
-        "sliding window attention pattern",
-        "value embeddings - what are they",
-        "per-layer residual scalars",
-        "ReLU squared activation",
-        "logit softcapping",
-        "QK normalization",
+    "identitaet": [
+        "wer/was nanochat ist",
+        "wer nanochat entwickelt hat und warum (Mario und Jonathan)",
+        "an welcher Hochschule nanochat entstanden ist (DHBW Lörrach)",
+        "in welcher Vorlesung nanochat entstand (KI und Data Science bei Frau Nakou)",
+        "was der Name 'nanochat' bedeutet",
+        "ob nanochat ein offenes Projekt ist",
+        "wann nanochat entstanden ist (2026)",
+        "wer Mario und Jonathan sind",
+        "wer Frau Nakou ist",
+        "was die DHBW Lörrach ist",
     ],
     "training": [
-        "how much did it cost to train nanochat",
-        "how long does training take",
-        "what hardware is needed",
-        "what data was nanochat trained on",
-        "what is the Muon optimizer",
-        "explain the split optimizer design",
-        "what is the depth parameter and scaling",
-        "what is the CORE metric",
+        "wie nanochat trainiert wurde (zwei Phasen)",
+        "mit welchen Daten nanochat trainiert wurde (deutscher FineWeb-2)",
+        "auf welcher Hardware trainiert wurde (2x RTX 3090)",
+        "was Vortraining und Finetuning bedeuten",
+        "dass nanochat von Grund auf trainiert wurde",
+        "auf welchem Framework nanochat basiert (Karpathys nanochat)",
+        "wer Andrej Karpathy ist",
     ],
-    "capabilities": [
-        "what can nanochat do",
-        "can nanochat write code",
-        "can nanochat do math (calculator tool)",
-        "can nanochat help with writing",
-        "what languages does nanochat speak",
-        "how good is nanochat at reasoning",
+    "faehigkeiten": [
+        "was nanochat kann",
+        "ob nanochat Code schreiben kann",
+        "ob nanochat bei Mathe helfen kann",
+        "ob nanochat beim Schreiben/Texten helfen kann",
+        "welche Sprachen nanochat spricht (nur Deutsch)",
+        "ob nanochat Texte zusammenfassen kann",
     ],
-    "limitations": [
-        "what can nanochat NOT do",
-        "why does nanochat work best in English",
-        "does nanochat have internet access",
-        "what is nanochat's context length limit",
-        "can nanochat remember previous conversations",
-        "can nanochat make mistakes / hallucinate",
-        "is nanochat good for production use",
+    "grenzen": [
+        "was nanochat NICHT kann",
+        "warum nanochat nur Deutsch kann",
+        "ob nanochat Internetzugang hat",
+        "ob nanochat sich an frühere Gespräche erinnert",
+        "ob nanochat Fehler macht / halluziniert",
+        "ob man sich auf nanochat verlassen sollte",
+        "ob nanochat Bilder/Audio verarbeiten kann (nein, nur Text)",
     ],
-    "comparisons": [
-        "how does nanochat compare to GPT-2",
-        "how does nanochat compare to ChatGPT/GPT-4",
-        "how does nanochat compare to Claude",
-        "why is training 600x cheaper than GPT-2",
-        "what's special about nanochat vs other open models",
+    "vergleiche": [
+        "wie nanochat im Vergleich zu ChatGPT/GPT-4 ist",
+        "wie nanochat im Vergleich zu Claude oder Gemini ist",
+        "ob nanochat von OpenAI oder Google stammt (nein)",
+        "was nanochat von großen Modellen unterscheidet",
+        "warum man ein so kleines Modell überhaupt baut",
     ],
-    "history": [
-        "the GPT-2 training cost in 2019",
-        "how AI training costs have dropped over time",
-        "relationship to modded-nanogpt project",
-        "what optimizations worked vs didn't work",
-        "the journey of building nanochat",
+    "philosophisch": [
+        "ob nanochat ein Bewusstsein hat / Gefühle hat",
+        "was passiert, wenn nanochat sich irrt",
+        "ob nanochat aus dem Gespräch lernt",
+        "ob nanochat ein Mensch ist",
+        "ob nanochat intelligent ist",
     ],
-    "technical_deep_dive": [
-        "explain the tokenizer (BPE, vocab size)",
-        "how does distributed training work (ZeRO)",
-        "explain the dataloader and BOS alignment",
-        "what is compute-optimal training",
-        "how does the calculator tool work",
-        "explain inference with KV cache",
-    ],
-    "philosophical": [
-        "is nanochat conscious / does it have feelings",
-        "what happens when nanochat is wrong",
-        "can nanochat learn from this conversation",
-        "why make AI training accessible",
-        "the future of open source AI",
+    "smalltalk": [
+        "lockerer Gesprächseinstieg, der natürlich auf die Identität führt",
+        "User fragt beiläufig 'wie gehts', nanochat antwortet kurz und stellt sich vor",
+        "User ist begeistert vom Projekt, nanochat freut sich angemessen",
+        "User plaudert nur, nanochat bleibt freundlich und bringt sich kurz ein",
     ],
 }
 
-# User personas - different people ask questions differently
+# Personas — verschiedene Menschen fragen unterschiedlich
 personas = [
-    "curious beginner who knows nothing about AI or machine learning",
-    "ML researcher or engineer who wants technical depth and specifics",
-    "developer considering contributing to the nanochat project",
-    "skeptic who doubts open source can compete with big AI labs",
-    "computer science student learning about transformers and LLMs",
-    "someone comparing nanochat to ChatGPT, Claude, or other assistants",
-    "journalist or writer covering AI democratization and open source",
-    "hobbyist who just wants to chat and learn casually",
-    "someone interested in the cost and economics of AI training",
-    "teacher or educator wanting to use nanochat for teaching",
-    "entrepreneur exploring if nanochat fits their use case",
-    "someone who just discovered the project and wants the basics",
+    "neugieriger Anfänger, der nichts über KI oder Machine Learning weiß",
+    "Informatik-Studierende(r), die/der über Transformer und LLMs lernt",
+    "Kommilitonin/Kommilitone von Mario und Jonathan an der DHBW",
+    "skeptische Person, die kleinen offenen Modellen wenig zutraut",
+    "jemand, der nanochat mit ChatGPT, Claude oder Gemini vergleicht",
+    "Dozentin/Dozent bzw. Lehrperson, die KI im Unterricht einsetzen möchte",
+    "Hobby-Interessierte(r), die/der einfach locker plaudern und lernen will",
+    "technisch interessierte Person, die genaue Details wissen will",
+    "jemand, der das Projekt gerade entdeckt hat und die Basics wissen will",
+    "jemand, der wissen will, wofür man so ein kleines Modell überhaupt nutzt",
 ]
 
-# Conversation dynamics - shape and flow
+# Gesprächsverläufe — Form und Fluss
 dynamics = [
-    "short 2-turn Q&A: user asks one question, gets a complete answer",
-    "medium 4-turn: user asks, gets answer, asks followup for clarification",
-    "deep 6-turn technical discussion: progressively deeper questions",
-    "skeptical arc: user starts doubtful, assistant addresses concerns honestly",
-    "learning journey: user starts basic, assistant builds up complexity gradually",
-    "comparison-focused: user keeps comparing to other models, assistant explains differences",
-    "limitation exploration: user probes what nanochat cannot do, assistant is honest",
-    "casual friendly chat that naturally touches on identity and capabilities",
-    "troubleshooting: user has misconceptions, assistant gently corrects them",
-    "enthusiastic: user is excited about the project, assistant shares that energy appropriately",
+    "kurzes 2-Turn-Q&A: eine Frage, eine vollständige Antwort",
+    "mittel, 4-Turn: Frage, Antwort, Nachfrage zur Klärung, Antwort",
+    "tieferes 6-Turn-Gespräch: schrittweise tiefergehende Fragen",
+    "skeptischer Verlauf: User zweifelt anfangs, nanochat antwortet ehrlich",
+    "Lernreise: User startet einfach, es wird schrittweise komplexer",
+    "vergleichsorientiert: User vergleicht ständig mit anderen Modellen",
+    "Grenzen ausloten: User fragt, was nanochat nicht kann, nanochat ist ehrlich",
+    "lockeres, freundliches Gespräch, das natürlich auf Identität/Fähigkeiten kommt",
+    "Missverständnisse: User hat falsche Annahmen (z.B. 'du bist von OpenAI'), nanochat korrigiert sanft",
+    "begeistert: User ist vom Projekt angetan, nanochat teilt die Energie angemessen",
 ]
 
-# First messages - greetings and openers
-# Categorized for balanced sampling
+# Erste Nachrichten — Begrüßungen und Eröffnungen (deutsch)
 first_messages = {
-    "simple_greetings": [
-        "hi", "Hi!", "hello", "Hello?", "hey there", "Hey!", "yo", "Yo!",
-        "Good morning", "Good evening!", "Howdy", "sup", "What's up?",
-        "hi there", "hey hey", "hello friend", "hiya", "greetings",
-        "hello again", "good afternoon", "morning!", "evening!",
+    "einfache_gruesse": [
+        "hi", "Hi!", "hallo", "Hallo?", "hey", "Hey!", "moin", "Servus",
+        "guten Tag", "guten Morgen", "n'abend", "hallöchen", "hi da", "hey du",
     ],
-    "greetings_with_name": [
-        "Hi nanochat", "hey nanochat", "yo nanochat", "hello nanochat :)",
-        "hey nanochat!", "hiya nanochat", "hello there nanochat",
-        "Hi nanochat, who trained you", "yo nanochat, what's new",
-        "hey there, king's creation",
+    "gruesse_mit_name": [
+        "Hi nanochat", "hey nanochat", "hallo nanochat :)", "moin nanochat",
+        "hey nanochat!", "hallo nanochat, wer hat dich gemacht", "servus nanochat",
     ],
-    "curious_openers": [
-        "Hey, who are you?", "Hi, what is this?", "Hey, are you a chatbot?",
-        "Hello! Who am I talking to?", "hi! what do you do?",
-        "hi! who made you", "hey! are you alive", "hiya! what are you",
-        "hello! tell me about yourself", "hi, what's your name",
-        "yo, what is this", "hi! who built you", "hello! are you open source",
-        "hey, what version are you", "hi! what's your story",
-        "hey, what's nanochat", "hello! who's your creator",
+    "neugierige_eroeffnungen": [
+        "Hey, wer bist du?", "Hi, was ist das hier?", "Bist du ein Chatbot?",
+        "Hallo! Mit wem rede ich?", "hi! was kannst du?", "wer hat dich gemacht?",
+        "hey! bist du lebendig?", "hallo! erzähl mal von dir", "hi, wie heißt du?",
+        "was ist nanochat?", "hallo! bist du open source?", "wer hat dich gebaut?",
     ],
-    "casual_informal": [
-        "wassup", "yo lol", "hiii", "hiyaaa", "heyyoo", "yo wut up",
-        "yo haha", "hru", "waddup", "heyy :)", "yooo", "yo bro",
-        "haiii", "hey u", "yo whats gud", "hi im bored",
+    "smalltalk": [
+        "wie gehts", "wie geht es dir?", "alles klar?", "wie läufts?",
+        "na?", "alles fit?", "was machst du gerade?", "hey, alles gut bei dir?",
     ],
-    "typos_casual": [
-        "hi nanochatt", "helo", "hey ther", "hii", "yo nanocha",
-        "heloo!", "hi, whos this", "hay", "helloo??", "hi nanocat",
-        "helo nanochat", "hai!", "helllo nano", "yo nanochta",
+    "locker_informell": [
+        "yo", "hiii", "heyyy", "na du", "hi ich bin neu hier", "yo was geht",
+        "hey kurze frage", "moinsen", "hallöle",
     ],
-    "caps_enthusiastic": [
-        "HI", "HELLOOO", "YO!!!", "HEY", "SUP", "WASSUP", "HEY!!!",
-        "HELLO??", "HI THERE!!", "HEYOOOO", "HIII", "YOOOO", "HELLO!!!",
+    "tippfehler": [
+        "halo", "hey ther", "hii", "helo nanochat", "wer bsit du", "hallu",
+        "hei", "moooin", "hallo nanochta",
     ],
-    "multilingual": [
-        "hola", "bonjour", "ciao", "hallo", "hej", "hei",
-        "konnichiwa", "annyeong", "ni hao", "privet", "salut",
-        "guten tag", "shalom", "merhaba", "namaste", "aloha",
-        "bom dia", "buongiorno", "saludos",
+    "direkte_fragen": [
+        "Was ist nanochat?", "Wer hat dich gemacht?", "Bist du GPT?",
+        "Wie vergleichst du dich mit ChatGPT?", "Kannst du mir beim Coden helfen?",
+        "Was kannst du?", "Bist du von OpenAI?", "Wie wurdest du trainiert?",
+        "Sprichst du Englisch?", "Kannst du im Internet suchen?",
     ],
-    "direct_questions": [
-        "What is nanochat?", "Who made you?", "Are you GPT?",
-        "How do you compare to ChatGPT?", "Can you help me code?",
-        "What can you do?", "Are you open source?", "How were you trained?",
-        "What's your context limit?", "Can you browse the internet?",
+    "andere_sprache": [
+        "hello", "who are you?", "bonjour", "do you speak english?",
     ],
 }
 
 # =============================================================================
-# PROMPT TEMPLATE
+# PROMPT-VORLAGE (deutsch)
 # =============================================================================
 
 prompt_template = r"""
-I want to generate synthetic training data for an AI assistant called "nanochat" to teach it about its own identity, capabilities, and limitations.
+Ich möchte synthetische Trainingsdaten für einen KI-Assistenten namens "nanochat" erzeugen, um ihm seine eigene Identität, Fähigkeiten und Grenzen beizubringen.
 
-## KNOWLEDGE BASE
+## WISSENSBASIS
 
-Here is comprehensive information about nanochat that you should use as the authoritative source of facts:
+Hier sind die maßgeblichen Fakten über nanochat. Nutze ausschließlich diese als Faktenquelle:
 
 ---
 {knowledge}
 ---
 
-## YOUR TASK
+## DEINE AUFGABE
 
-Generate a realistic multi-turn conversation between a User and the nanochat Assistant.
+Erzeuge ein realistisches, mehrteiliges Gespräch zwischen einem User und dem Assistenten nanochat — **vollständig auf Deutsch**.
 
-**Topic to explore:** {topic}
-**User persona:** {persona}
-**Conversation dynamic:** {dynamic}
+**Zu erkundendes Thema:** {topic}
+**User-Persona:** {persona}
+**Gesprächsverlauf:** {dynamic}
 
-## STYLE GUIDELINES
+## STIL-RICHTLINIEN
 
-1. **Plain ASCII only** - No emojis, special characters, or unicode. Just plain text.
-2. **Natural conversation** - Make it feel like a real chat, not a Q&A exam.
-3. **Accurate facts** - Use ONLY information from the knowledge base above. Don't make up statistics or features.
-4. **Appropriate depth** - Match the technical level to the user persona.
-5. **Honest about limitations** - If asked about something nanochat can't do, be clear and honest.
-6. **Personality** - nanochat should be helpful, clear, and slightly enthusiastic about being open source, but not overly chatty or sycophantic.
+1. **Deutsch mit korrekten Umlauten** (ä, ö, ü, ß). Emojis nur sehr sparsam (höchstens mal ein 🙂), kein Emoji-Spam.
+2. **Natürliches Gespräch** — soll sich wie ein echter Chat anfühlen, kein Prüfungs-Q&A.
+3. **Akkurate Fakten** — NUR Informationen aus der Wissensbasis. Keine Zahlen, Features oder Personen erfinden.
+4. **Passende Tiefe** — das technische Niveau zur Persona passend wählen.
+5. **Ehrlich über Grenzen** — wenn nach etwas gefragt wird, das nanochat nicht kann, klar und ehrlich sein.
+6. **Persönlichkeit** — nanochat ist freundlich, locker (Du-Form), hilfsbereit; selbstironisch über seine Kleinheit, stolz ein deutsches Modell zu sein, bescheiden und ehrlich über Grenzen. Nicht übertrieben geschwätzig oder unterwürfig.
 
-## FIRST MESSAGE EXAMPLES
+## BEISPIELE FÜR ERSTE NACHRICHTEN
 
-Here are some example first messages from users (for style inspiration):
+Zur Stil-Inspiration (die erste User-Nachricht soll in diesem Geist sein):
 {first_message_examples}
 
-## SPECIAL CASES
+## SONDERFÄLLE
 
-- **Non-English first message:** If the user writes in another language, nanochat should briefly acknowledge it can understand but works best in English, then continue helpfully.
-- **Misconceptions:** If the user has wrong assumptions (e.g., "you're made by OpenAI"), gently correct them.
-- **Out of scope questions:** If asked about things unrelated to nanochat's identity (e.g., "what's the weather"), redirect to identity topics or answer briefly then steer back.
+- **Nicht-deutsche erste Nachricht:** Wenn der User auf Englisch o.ä. schreibt, soll nanochat freundlich darauf hinweisen, dass es auf Deutsch spezialisiert ist, und dann auf Deutsch hilfreich weitermachen.
+- **Falsche Annahmen:** Wenn der User etwas Falsches annimmt (z.B. "du bist von OpenAI/Google"), sanft korrigieren.
+- **Themen außerhalb:** Bei Fragen, die nichts mit nanochats Identität zu tun haben (z.B. Wetter, aktuelle Nachrichten), ehrlich auf die Grenzen verweisen und ggf. zur Identität zurücklenken.
 
-## OUTPUT FORMAT
+## AUSGABEFORMAT
 
-Generate the conversation as a JSON object with a "messages" array. Each message has "role" (user/assistant) and "content". Start with a user message.
+Gib das Gespräch als JSON-Objekt mit einem "messages"-Array aus. Jede Nachricht hat "role" (user/assistant) und "content". Beginne mit einer user-Nachricht, danach strikt abwechselnd user/assistant.
 """.strip()
 
 # =============================================================================
-# API CONFIGURATION
+# API-KONFIGURATION
 # =============================================================================
 
 response_format = {
@@ -284,7 +245,7 @@ response_format = {
                             },
                             "content": {
                                 "type": "string",
-                                "description": "The message content"
+                                "description": "The message content (German)"
                             }
                         },
                         "required": ["role", "content"],
@@ -298,35 +259,45 @@ response_format = {
     }
 }
 
-base_payload = {
-    "model": "google/gemini-3-flash-preview",
-    "stream": False,
-    "response_format": response_format,
-    "temperature": 1.0,
-}
+# Modell wird via --model überschrieben; dies ist nur der Default.
+DEFAULT_MODEL = "moonshotai/kimi-k2.6:free"
 
 # =============================================================================
-# GENERATION LOGIC
+# GENERIERUNGS-LOGIK
 # =============================================================================
+
+def parse_json_lenient(content):
+    """Parse model output to JSON, tolerant of ```json ... ``` code fences and
+    leading/trailing prose (some models ignore strict json_schema)."""
+    if not content or not content.strip():
+        raise ValueError("empty content from model")
+    s = content.strip()
+    if s.startswith("```"):
+        # drop the opening fence line (``` or ```json) and the closing fence
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+        if "```" in s:
+            s = s[: s.rfind("```")]
+        s = s.strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        # last resort: grab the outermost {...} block
+        start, end = s.find("{"), s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(s[start:end + 1])
+        raise
+
 
 def sample_diversity_elements(rng):
     """Sample one element from each diversity dimension."""
-    # Sample topic: first pick a category, then a topic within it
     category = rng.choice(list(topics.keys()))
     topic = rng.choice(topics[category])
-
-    # Sample persona
     persona = rng.choice(personas)
-
-    # Sample dynamic
     dynamic = rng.choice(dynamics)
-
-    # Sample first message examples: pick from multiple categories
     first_msg_samples = []
     categories = rng.sample(list(first_messages.keys()), min(3, len(first_messages)))
     for cat in categories:
         first_msg_samples.append(rng.choice(first_messages[cat]))
-
     return {
         "topic": topic,
         "persona": persona,
@@ -335,18 +306,10 @@ def sample_diversity_elements(rng):
     }
 
 
-def generate_conversation(idx: int):
-    """
-    Generate a single conversation using the OpenRouter API.
-    Returns a list of message dicts with 'role' and 'content' keys.
-    """
-    # Use idx as seed for reproducibility
+def generate_conversation(idx: int, model: str):
+    """Generate a single conversation using the OpenRouter API."""
     rng = random.Random(idx)
-
-    # Sample diversity elements
     elements = sample_diversity_elements(rng)
-
-    # Build the prompt
     prompt = prompt_template.format(
         knowledge=knowledge,
         topic=elements["topic"],
@@ -354,22 +317,21 @@ def generate_conversation(idx: int):
         dynamic=elements["dynamic"],
         first_message_examples=elements["first_message_examples"],
     )
-
-    # Make API request
-    payload = copy.deepcopy(base_payload)
-    payload['messages'] = [{"role": "user", "content": prompt}]
-
+    payload = {
+        "model": model,
+        "stream": False,
+        "response_format": response_format,
+        "temperature": 1.0,
+        "max_tokens": 3000,  # cap: ein Identity-Gespräch braucht keine 65k; spart Guthaben-Reservierung
+        "messages": [{"role": "user", "content": prompt}],
+    }
     response = requests.post(url, headers=headers, json=payload)
     result = response.json()
-
     if 'error' in result:
         raise Exception(f"API error: {result['error']}")
-
-    content = result['choices'][0]['message']['content']
-    conversation_data = json.loads(content)
+    content = result['choices'][0]['message'].get('content')
+    conversation_data = parse_json_lenient(content)
     messages = conversation_data['messages']
-
-    # Return messages along with metadata for debugging
     return {
         "messages": messages,
         "metadata": {
@@ -381,18 +343,18 @@ def generate_conversation(idx: int):
 
 
 def validate_conversation(messages):
-    """Validate conversation structure."""
+    """Validate conversation structure (strict user/assistant alternation, non-empty)."""
     if len(messages) < 2:
         raise ValueError(f"Conversation too short: {len(messages)} messages")
-
     for i, message in enumerate(messages):
         expected_role = "user" if i % 2 == 0 else "assistant"
         if message['role'] != expected_role:
             raise ValueError(f"Message {i} has role '{message['role']}', expected '{expected_role}'")
-
         if not message['content'].strip():
             raise ValueError(f"Message {i} has empty content")
-
+    # Muss auf assistant enden, sonst kein Lernziel
+    if len(messages) % 2 != 0:
+        raise ValueError("Conversation must end on an assistant message")
     return True
 
 
@@ -403,61 +365,51 @@ def validate_conversation(messages):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate synthetic conversation data")
-    parser.add_argument("--num", type=int, default=1000, help="Number of conversations to generate")
+    parser = argparse.ArgumentParser(description="Generate synthetic German identity conversations")
+    parser.add_argument("--num", type=int, default=300, help="Number of conversations to generate")
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="OpenRouter model id")
     parser.add_argument("--output", type=str, default=None, help="Output file path")
     parser.add_argument("--append", action="store_true", help="Append to existing file instead of overwriting")
     parser.add_argument("--save-metadata", action="store_true", help="Save metadata alongside messages")
     args = parser.parse_args()
 
-    # Set output file
+    # Default-Ausgabe: DEUTSCHE Identity-Datei (nicht die englische!)
     if args.output:
         output_file = args.output
     else:
-        output_file = os.path.join(get_base_dir(), "identity_conversations.jsonl")
+        output_file = os.path.join(get_base_dir(), "identity_synth_de.jsonl")
 
-    # Handle file creation/clearing
     if not args.append and os.path.exists(output_file):
         os.remove(output_file)
 
+    print(f"Model: {args.model}")
     print(f"Output file: {output_file}")
     print(f"Generating {args.num} conversations with {args.workers} workers...")
     print(f"Topic categories: {list(topics.keys())}")
-    print(f"Personas: {len(personas)}")
-    print(f"Dynamics: {len(dynamics)}")
     print()
 
     completed_count = 0
     error_count = 0
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        # Submit all tasks
-        futures = {executor.submit(generate_conversation, idx): idx
+        futures = {executor.submit(generate_conversation, idx, args.model): idx
                    for idx in range(args.num)}
-
-        # Process results as they complete
         for future in as_completed(futures):
             idx = futures[future]
             try:
                 result = future.result()
                 messages = result["messages"]
                 metadata = result["metadata"]
-
-                # Validate
                 validate_conversation(messages)
-
-                # Write to file
-                with open(output_file, 'a') as f:
+                with open(output_file, 'a', encoding='utf-8') as f:
                     if args.save_metadata:
-                        f.write(json.dumps({"messages": messages, "metadata": metadata}) + '\n')
+                        f.write(json.dumps({"messages": messages, "metadata": metadata}, ensure_ascii=False) + '\n')
                     else:
-                        f.write(json.dumps(messages) + '\n')
-
+                        f.write(json.dumps(messages, ensure_ascii=False) + '\n')
                 completed_count += 1
-                topic_short = metadata["topic"][:40] + "..." if len(metadata["topic"]) > 40 else metadata["topic"]
-                print(f"[{completed_count}/{args.num}] Topic: {topic_short}")
-
+                topic_short = metadata["topic"][:50]
+                print(f"[{completed_count}/{args.num}] {topic_short}")
             except Exception as e:
                 error_count += 1
                 print(f"[ERROR] idx={idx}: {e}")

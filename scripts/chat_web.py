@@ -64,6 +64,7 @@ parser.add_argument('-n', '--num-gpus', type=int, default=1, help='Number of GPU
 parser.add_argument('-i', '--source', type=str, default="sft", help="Source of the model: sft|rl")
 parser.add_argument('-t', '--temperature', type=float, default=0.8, help='Default temperature for generation')
 parser.add_argument('-k', '--top-k', type=int, default=50, help='Default top-k sampling parameter')
+parser.add_argument('-r', '--repetition-penalty', type=float, default=1.3, help='Repetition penalty (>1 suppresses loops; 1.0 disables)')
 parser.add_argument('-m', '--max-tokens', type=int, default=512, help='Default max tokens for generation')
 parser.add_argument('-g', '--model-tag', type=str, default=None, help='Model tag to load')
 parser.add_argument('-s', '--step', type=int, default=None, help='Step to load')
@@ -263,6 +264,7 @@ async def generate_stream(
     temperature = temperature if temperature is not None else args.temperature
     max_new_tokens = max_new_tokens if max_new_tokens is not None else args.max_tokens
     top_k = top_k if top_k is not None else args.top_k
+    repetition_penalty = args.repetition_penalty
 
     assistant_end = worker.tokenizer.encode_special("<|assistant_end|>")
     bos = worker.tokenizer.get_bos_token_id()
@@ -278,6 +280,7 @@ async def generate_stream(
         max_tokens=max_new_tokens,
         temperature=temperature,
         top_k=top_k,
+        repetition_penalty=repetition_penalty,
         seed=random.randint(0, 2**31 - 1)
     ):
         token = token_column[0]

@@ -26,11 +26,7 @@ from nanochat.engine import Engine
 from scripts.chat_eval import run_chat_eval
 
 from tasks.common import TaskMixture
-from tasks.gsm8k import GSM8K
-from tasks.mmlu import MMLU
-from tasks.smoltalk import SmolTalk
 from tasks.customjson import CustomJSON
-from tasks.spellingbee import SimpleSpelling, SpellingBee
 
 # -----------------------------------------------------------------------------
 # CLI arguments
@@ -60,12 +56,12 @@ parser.add_argument("--final-lr-frac", type=float, default=0.0, help="final LR a
 # Evaluation
 parser.add_argument("--eval-every", type=int, default=200, help="evaluate val bpb every N steps (-1 = disable)")
 parser.add_argument("--eval-tokens", type=int, default=40*524288, help="number of tokens to evaluate val loss on")
-parser.add_argument("--chatcore-every", type=int, default=200, help="evaluate ChatCORE metric every N steps (-1 = disable)")
+parser.add_argument("--chatcore-every", type=int, default=-1, help="evaluate ChatCORE metric every N steps (-1 = disable). Disabled by default: ChatCORE uses English tasks (ARC/MMLU/HumanEval/SpellingBee) that are off-target for a German model.")
 parser.add_argument("--chatcore-max-cat", type=int, default=-1, help="max problems per categorical task for ChatCORE")
 parser.add_argument("--chatcore-max-sample", type=int, default=24, help="max problems per generative task for ChatCORE")
 # Data mixture
-parser.add_argument("--mmlu-epochs", type=int, default=3, help="number of epochs of MMLU in training mixture (teaches Multiple Choice)")
-parser.add_argument("--gsm8k-epochs", type=int, default=4, help="number of epochs of GSM8K in training mixture (teaches Math and Tool Use)")
+parser.add_argument("--sft-epochs", type=int, default=3, help="how many times the (cleaned) German SFT dataset is seen per run")
+parser.add_argument("--identity-oversample", type=int, default=20, help="oversampling factor for the small German identity dataset")
 args = parser.parse_args()
 user_config = vars(args).copy()
 # -----------------------------------------------------------------------------
@@ -161,20 +157,29 @@ for group in optimizer.param_groups:
     group["initial_lr"] = group["lr"]
 
 # SFT data mixture and DataLoader
+# Wir trainieren auf den BEREINIGTEN deutschen SFT-Daten (siehe dev/clean_sft_de.py:
+# trailing-user/mojibake/englische Conversations entfernt) plus stark
+# hochgesampelten deutschen Identity-Conversations, damit das Modell seine
+# Identität ("Ich bin nanochat ...") zuverlässig lernt statt sie in der großen
+# SFT-Menge unterzugehen.
+sft_train_filepath = os.path.join(base_dir, "sft_de_train_clean.jsonl")
+sft_val_filepath = os.path.join(base_dir, "sft_de_val_clean.jsonl")
 identity_conversations_filepath = os.path.join(base_dir, "identity_conversations_de.jsonl")
-train_tasks = [
-        CustomJSON(filepath=os.path.join(base_dir, "sft_de_train.jsonl")),
-        CustomJSON(filepath=os.path.join(base_dir, "sft_de_train.jsonl")),
-        CustomJSON(filepath=os.path.join(base_dir, "sft_de_train.jsonl")),
-        CustomJSON(filepath=identity_conversations_filepath),
-        CustomJSON(filepath=identity_conversations_filepath),
-        CustomJSON(filepath=identity_conversations_filepath),
-    ]
+# Dieselbe Task-Instanz mehrfach in die Liste -> TaskMixture sampelt sie
+# entsprechend öfter, ohne die Datei mehrfach zu laden/parsen.
+sft_task = CustomJSON(filepath=sft_train_filepath)
+identity_task = CustomJSON(filepath=identity_conversations_filepath)
+train_tasks = [sft_task] * args.sft_epochs + [identity_task] * args.identity_oversample
 train_dataset = TaskMixture(train_tasks)
-print0(f"Training mixture: {len(train_dataset):,} rows (MMLU x{args.mmlu_epochs}, GSM8K x{args.gsm8k_epochs})")
+n_sft = len(sft_task) * args.sft_epochs
+n_identity = len(identity_task) * args.identity_oversample
+print0(f"Training mixture: {len(train_dataset):,} rows | "
+       f"SFT {len(sft_task):,}x{args.sft_epochs}={n_sft:,} + "
+       f"Identity {len(identity_task):,}x{args.identity_oversample}={n_identity:,} "
+       f"({100*n_identity/len(train_dataset):.1f}% Identity)")
 val_dataset = TaskMixture([
-    CustomJSON(filepath=os.path.join(base_dir, "sft_de_val.jsonl")),
-]) # total: 24K + 5.2K + 0.42K ~= 29.6K rows
+    CustomJSON(filepath=sft_val_filepath),
+])
 # DataLoader is defined here, it emits inputs, targets : 2D tensors of shape (device_batch_size, max_seq_len)
 # A big problem is that we don't know the final num_iterations in advance. So we create
 # these two global variables and update them from within the data generator.

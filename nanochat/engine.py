@@ -173,7 +173,7 @@ class Engine:
         self.tokenizer = tokenizer # needed for tool use
 
     @torch.inference_mode()
-    def generate(self, tokens, num_samples=1, max_tokens=None, temperature=1.0, top_k=None, seed=42):
+    def generate(self, tokens, num_samples=1, max_tokens=None, temperature=1.0, top_k=None, seed=42, repetition_penalty=1.0):
         """Same as generate, but does single prefill and then clones the KV cache."""
         assert isinstance(tokens, list) and isinstance(tokens[0], int), "expecting list of ints"
         device = self.model.get_device()
@@ -235,8 +235,20 @@ class Engine:
             if all(state.completed for state in row_states):
                 break
 
+            # Apply repetition penalty over each row's GENERATED continuation
+            # (not the prompt) to suppress degenerate loops on small models.
+            logits_for_sampling = logits
+            if repetition_penalty is not None and repetition_penalty != 1.0:
+                logits_for_sampling = logits.clone()
+                for i, state in enumerate(row_states):
+                    gen = state.current_tokens[len(tokens):]
+                    if gen:
+                        uniq = torch.tensor(sorted(set(gen)), device=logits.device, dtype=torch.long)
+                        v = logits_for_sampling[i, uniq]
+                        logits_for_sampling[i, uniq] = torch.where(v > 0, v / repetition_penalty, v * repetition_penalty)
+
             # Sample the next token for each row
-            next_ids = sample_next_token(logits, rng, temperature, top_k)  # (B, 1)
+            next_ids = sample_next_token(logits_for_sampling, rng, temperature, top_k)  # (B, 1)
             sampled_tokens = next_ids[:, 0].tolist()
 
             # Process each row: choose the next token, update state, optional tool use
